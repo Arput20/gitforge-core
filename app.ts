@@ -5,12 +5,16 @@ import { createBlob, createTree, createCommit } from './src/git.ts';
 // --- Store ---
 export interface Repo {
   id: number;
-  owner: string;
+  owner: { login: string; id: number };
   name: string;
+  full_name: string;
   description: string;
   private: boolean;
   defaultBranch: string;
   createdAt: string;
+  updatedAt: string;
+  html_url: string;
+  fork: boolean;
   refs: Map<string, string>;
   objects: Map<string, { type: string; bytes: Uint8Array }>;
   labels: Map<string, string>;
@@ -118,14 +122,19 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
+        const login = buildScenario().viewer.login;
         const repo: Repo = {
         id: Date.now(),
-        owner: buildScenario().viewer.login,
+        owner: { login: login, id: 1 },
         name: data.name,
+        full_name: `${login}/${data.name}`,
         description: data.description || '',
         private: data.private || false,
         defaultBranch: 'main',
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        html_url: `http://localhost/repos/${login}/${data.name}`,
+        fork: false,
         refs: new Map(),
         objects: new Map(),
         labels: new Map(),
@@ -133,7 +142,7 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
         pulls: [],
         };
 
-        store.repos.set(`${repo.owner}/${repo.name}`, repo);
+        store.repos.set(`${repo.owner.login}/${repo.name}`, repo);
         sendJson(res, 201, repo);
       } catch {
         sendError(res, 400, 'Malformed JSON');
