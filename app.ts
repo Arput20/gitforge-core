@@ -1,7 +1,277 @@
 import http from 'node:http';
-import { sendJson, sendError } from './src/httpx.ts';
-import { handleRest } from './src/rest.ts';
 
+// --- Store ---
+export interface Repo {
+  id: number;
+  owner: string;
+  name: string;
+  description: string;
+  private: boolean;
+  defaultBranch: string;
+  createdAt: string;
+  refs: Map<string, string>;
+  objects: Map<string, { type: string; bytes: Uint8Array }>;
+  labels: Map<string, string>;
+  issues: Issue[];
+  pulls: Pull[];
+}
+
+export interface Issue {
+  id: number;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  comments: Comment[];
+  user: { login: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Comment {
+  id: number;
+  body: string;
+  user: { login: string };
+  createdAt: string;
+}
+
+export interface Pull {
+  id: number;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  comments: Comment[];
+  user: { login: string };
+  createdAt: string;
+  updatedAt: string;
+  head: { ref: string };
+  base: { ref: string };
+  merged: boolean;
+  mergeable: boolean;
+}
+
+export class Store {
+  repos: Map<string, Repo> = new Map();
+}
+
+export const store = new Store();
+
+// --- HTTP Utils ---
+export function sendJson(res: http.ServerResponse, status: number, body: any, extraHeaders: Record<string, string> = {}) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'X-GitHub-Request-Id': Math.random().toString(36).substring(2, 10),
+    ...extraHeaders,
+  });
+  res.end(payload);
+}
+
+export function sendError(res: http.ServerResponse, status: number, message: string) {
+  sendJson(res, status, { message });
+}
+
+// --- Pagination ---
+export function paginate<T>(items: T[], page: number = 1, perPage: number = 30): T[] {
+  const start = (page - 1) * perPage;
+  return items.slice(start, start + perPage);
+}
+
+// --- Rest Handler ---
+export async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, urlParts: string[]) {
+  const method = req.method;
+  const path = urlParts.join('/');
+  const urlObj = new URL(req.url!, 'http://localhost');
+  const page = parseInt(urlObj.searchParams.get('page') || '1');
+  const perPage = parseInt(urlObj.searchParams.get('per_page') || '30');
+
+  if (method === 'GET' && path === 'user/repos') {
+    const repos = Array.from(store.repos.values());
+    sendJson(res, 200, paginate(repos, page, perPage));
+    return;
+  }
+
+  if (method === 'POST' && path === 'user/repos') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const repo: Repo = {
+          id: Date.now(),
+          owner: 'viewer', // Should be derived from token
+          name: data.name,
+          description: data.description || '',
+          private: data.private || false,
+          defaultBranch: 'main',
+          createdAt: new Date().toISOString(),
+          refs: new Map(),
+          objects: new Map(),
+          labels: new Map(),
+          issues: [],
+          pulls: [],
+        };
+        store.repos.set(`${repo.owner}/${repo.name}`, repo);
+        sendJson(res, 201, repo);
+      } catch {
+        sendError(res, 400, 'Malformed JSON');
+      }
+    });
+    return;
+  }
+
+  if (path.startsWith('repos/')) {
+    const parts = path.split('/');
+    const owner = parts[1];
+    const repoName = parts[2];
+    const repo = store.repos.get(`${owner}/${repoName}`);
+    
+    if (!repo) {
+      sendError(res, 404, 'Repository not found');
+      return;
+    }
+
+    const subPath = parts.slice(3).join('/');
+
+    // Contents
+    if (subPath.startsWith('contents')) {
+        const filePath = parts.slice(4).join('/');
+        
+        if (method === 'GET') {
+            const object = repo.objects.get(filePath);
+            if (!object) return sendError(res, 404, 'File not found');
+            sendJson(res, 200, {
+                name: filePath.split('/').pop(),
+                path: filePath,
+                type: object.type,
+                content: Buffer.from(object.bytes).toString('base64'),
+                encoding: 'base64'
+            });
+            return;
+        }
+        
+        if (method === 'PUT') {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                const data = JSON.parse(body);
+                repo.objects.set(filePath, { type: 'file', bytes: Buffer.from(data.content, 'base64') });
+                sendJson(res, 201, { content: { path: filePath, name: filePath.split('/').pop() } });
+            });
+            return;
+        }
+
+        if (method === 'DELETE') {
+            repo.objects.delete(filePath);
+            sendJson(res, 200, { message: 'File deleted' });
+            return;
+        }
+    }
+    // Labels
+    else if (subPath.startsWith('labels')) {
+        if (method === 'GET') {
+            const labels = Array.from(repo.labels.entries()).map(([name, color]) => ({ name, color }));
+            sendJson(res, 200, paginate(labels, page, perPage));
+            return;
+        } else if (method === 'POST') {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                const data = JSON.parse(body);
+                repo.labels.set(data.name, data.color);
+                sendJson(res, 201, { name: data.name, color: data.color });
+            });
+            return;
+        }
+    }
+    // Issues
+    else if (subPath.startsWith('issues')) {
+        if (method === 'GET') {
+            sendJson(res, 200, paginate(repo.issues, page, perPage));
+            return;
+        } else if (method === 'POST') {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                const data = JSON.parse(body);
+                const issue: Issue = {
+                    id: Date.now(),
+                    number: repo.issues.length + 1,
+                    title: data.title,
+                    body: data.body || '',
+                    state: 'open',
+                    labels: data.labels || [],
+                    comments: [],
+                    user: { login: 'user' },
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                };
+                repo.issues.push(issue);
+                sendJson(res, 201, issue);
+            });
+            return;
+        }
+    }
+    // Pulls
+    else if (subPath.startsWith('pulls')) {
+        if (method === 'GET') {
+            sendJson(res, 200, paginate(repo.pulls, page, perPage));
+            return;
+        } else if (method === 'POST') {
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                const data = JSON.parse(body);
+                const pull: Pull = {
+                    id: Date.now(),
+                    number: repo.pulls.length + 1,
+                    title: data.title,
+                    body: data.body || '',
+                    state: 'open',
+                    labels: [],
+                    comments: [],
+                    user: { login: 'user' },
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    head: { ref: data.head },
+                    base: { ref: data.base },
+                    merged: false,
+                    mergeable: true
+                };
+                repo.pulls.push(pull);
+                sendJson(res, 201, pull);
+            });
+            return;
+        } else if (method === 'PUT') {
+            // Updating pull request (e.g., closing)
+             const pullNumber = parseInt(parts[4]);
+             const pull = repo.pulls.find(p => p.number === pullNumber);
+             if (!pull) return sendError(res, 404, 'Pull not found');
+             
+             let body = '';
+             req.on('data', chunk => { body += chunk; });
+             req.on('end', () => {
+                 const data = JSON.parse(body);
+                 if (data.state) pull.state = data.state;
+                 sendJson(res, 200, pull);
+             });
+             return;
+        }
+    }
+    else if (parts.length === 3) {
+      // Original repo GET
+      sendJson(res, 200, repo);
+      return;
+    }
+  }
+
+  sendError(res, 404, 'Not Found');
+}
+
+// --- App ---
 export function createApp() {
   return http.createServer(async (req, res) => {
     const url = req.url || '/';
