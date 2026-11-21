@@ -82,7 +82,7 @@ export function paginate<T>(items: T[], page: number = 1, perPage: number = 30):
 }
 
 // --- Rest Handler ---
-export async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, urlParts: string[]) {
+export async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, urlParts: string[], envUrl: string) {
   const method = req.method;
   const path = urlParts.join('/');
   const urlObj = new URL(req.url!, 'http://localhost');
@@ -101,7 +101,13 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
 
   if (method === 'GET' && path === 'user/repos') {
     const repos = Array.from(store.repos.values());
-    sendJson(res, 200, paginate(repos, page, perPage));
+    const totalPages = Math.ceil(repos.length / perPage);
+    const headers: Record<string, string> = {};
+    if (page < totalPages) {
+        const nextUrl = `${envUrl}/api/v3/user/repos?per_page=${perPage}&page=${page + 1}`;
+        headers['Link'] = `<${nextUrl}>; rel="next"`;
+    }
+    sendJson(res, 200, paginate(repos, page, perPage), headers);
     return;
   }
 
@@ -284,11 +290,12 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
 }
 
 // --- App ---
-export function createApp() {
+export function createApp(envUrl: string) {
   return http.createServer(async (req, res) => {
-    const url = req.url || '/';
+    const urlObj = new URL(req.url!, 'http://localhost');
+    const path = urlObj.pathname;
 
-    if (url === '/healthz' && req.method === 'GET') {
+    if (path === '/healthz' && req.method === 'GET') {
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -300,10 +307,10 @@ export function createApp() {
       return;
     }
 
-    if (url.startsWith('/api/v3')) {
-      const parts = url.split('/').filter(p => p !== '');
+    if (path.startsWith('/api/v3')) {
+      const parts = path.split('/').filter(p => p !== '');
       // parts[0] is 'api', parts[1] is 'v3'
-      await handleRest(req, res, parts.slice(2));
+      await handleRest(req, res, parts.slice(2), envUrl);
       return;
     }
 
