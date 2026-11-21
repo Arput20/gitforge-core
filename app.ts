@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { buildScenario } from './src/scenario.ts';
+import { createBlob, createTree, createCommit } from './src/git.ts';
 
 // --- Store ---
 export interface Repo {
@@ -176,8 +177,24 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
             req.on('data', chunk => { body += chunk; });
             req.on('end', () => {
                 const data = JSON.parse(body);
-                repo.objects.set(filePath, { type: 'file', bytes: Buffer.from(data.content, 'base64') });
-                sendJson(res, 201, { content: { path: filePath, name: filePath.split('/').pop() } });
+                const content = Buffer.from(data.content, 'base64');
+                const blob = createBlob(content);
+                repo.objects.set(blob.sha, { type: 'blob', bytes: blob.bytes });
+                
+                // For simplicity, we just create a tree with this one file.
+                // In a real implementation, we'd need to update the existing tree.
+                const tree = createTree([{ mode: '100644', name: filePath.split('/').pop()!, sha: blob.sha }]);
+                repo.objects.set(tree.sha, { type: 'tree', bytes: tree.bytes });
+
+                const parentSha = repo.refs.get('main') || null;
+                const commit = createCommit(tree.sha, parentSha, data.message, { name: 'user', email: 'user@example.com', date: `${Math.floor(Date.now() / 1000)} +0000` });
+                repo.objects.set(commit.sha, { type: 'commit', bytes: commit.bytes });
+                repo.refs.set('main', commit.sha);
+
+                sendJson(res, 201, {
+                    content: { name: filePath.split('/').pop(), path: filePath, sha: blob.sha, size: content.length, type: 'file', encoding: 'base64', content: data.content },
+                    commit: { sha: commit.sha, message: data.message, author: { name: 'user', email: 'user@example.com', date: new Date().toISOString() }, committer: { name: 'user', email: 'user@example.com', date: new Date().toISOString() } }
+                });
             });
             return;
         }
