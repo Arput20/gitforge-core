@@ -233,7 +233,7 @@ export interface ScenarioRepo {
   readonly fullName: string;
   readonly description: string;
   readonly private: boolean;
-  readonly defaultBranch: string;
+  readonly default_branch: string;
 }
 
 export interface ScenarioBlob {
@@ -320,7 +320,7 @@ export function generateRepos(rng: Rng, owner: string, count: number, firstId = 
         fullName: `${owner}/${name}`,
         description: rng.pick(REPO_DESCRIPTIONS),
         private: i % 7 === 3,
-        defaultBranch: DEFAULT_BRANCH,
+        default_branch: DEFAULT_BRANCH,
       }),
     );
   }

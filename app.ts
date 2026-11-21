@@ -10,7 +10,7 @@ export interface Repo {
   full_name: string;
   description: string;
   private: boolean;
-  defaultBranch: string;
+  default_branch: string;
   createdAt: string;
   updatedAt: string;
   html_url: string;
@@ -20,6 +20,37 @@ export interface Repo {
   labels: Map<string, string>;
   issues: Issue[];
   pulls: Pull[];
+}
+
+export function repoJson(repo: Repo, host: string) {
+  return {
+    id: repo.id,
+    node_id: `repo_${repo.id}`,
+    name: repo.name,
+    full_name: repo.full_name,
+    owner: {
+      login: repo.owner.login,
+      id: repo.owner.id,
+      avatar_url: `http://${host}/avatars/${repo.owner.login}`,
+      type: 'User',
+    },
+    private: repo.private,
+    description: repo.description,
+    fork: repo.fork,
+    html_url: repo.html_url,
+    created_at: repo.createdAt,
+    updated_at: repo.updatedAt,
+    pushed_at: repo.updatedAt,
+    default_branch: repo.default_branch,
+    has_issues: true,
+    has_pull_requests: true,
+    open_issues_count: repo.issues.filter(i => i.state === 'open').length,
+    size: 0,
+    watchers_count: 0,
+    stargazers_count: 0,
+    language: null,
+    url: `http://${host}/api/v3/repos/${repo.full_name}`,
+  };
 }
 
 export interface Issue {
@@ -93,6 +124,7 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
   const urlObj = new URL(req.url!, 'http://localhost');
   const page = parseInt(urlObj.searchParams.get('page') || '1');
   const perPage = parseInt(urlObj.searchParams.get('per_page') || '30');
+  const host = req.headers.host || 'localhost';
 
   if (path === '') {
     sendJson(res, 200, {}, { 'X-OAuth-Scopes': 'repo, read:org' });
@@ -109,10 +141,11 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
     const totalPages = Math.ceil(repos.length / perPage);
     const headers: Record<string, string> = {};
     if (page < totalPages) {
-        const nextUrl = `${envUrl}/api/v3/user/repos?per_page=${perPage}&page=${page + 1}`;
+        const nextUrl = `http://${host}/api/v3/user/repos?per_page=${perPage}&page=${page + 1}`;
         headers['Link'] = `<${nextUrl}>; rel="next"`;
     }
-    sendJson(res, 200, paginate(repos, page, perPage), headers);
+    const reposJson = repos.map(r => repoJson(r, host));
+    sendJson(res, 200, paginate(reposJson, page, perPage), headers);
     return;
   }
 
@@ -130,10 +163,10 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
         full_name: `${login}/${data.name}`,
         description: data.description || '',
         private: data.private || false,
-        defaultBranch: 'main',
+        default_branch: 'main',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        html_url: `http://localhost/repos/${login}/${data.name}`,
+        html_url: `http://${host}/repos/${login}/${data.name}`,
         fork: false,
         refs: new Map(),
         objects: new Map(),
@@ -143,7 +176,7 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
         };
 
         store.repos.set(`${repo.owner.login}/${repo.name}`, repo);
-        sendJson(res, 201, repo);
+        sendJson(res, 201, repoJson(repo, host));
       } catch {
         sendError(res, 400, 'Malformed JSON');
       }
@@ -307,7 +340,7 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
     }
     else if (parts.length === 3) {
       // Original repo GET
-      sendJson(res, 200, repo);
+      sendJson(res, 200, repoJson(repo, host));
       return;
     }
   }
