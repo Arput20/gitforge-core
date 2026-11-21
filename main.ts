@@ -1,5 +1,4 @@
 import { createApp } from './app.ts';
-import { createServer } from 'node:http';
 
 const envUrl = (process.env.MAKEFUN_ENV_URL || '').replace(/\/+$/, '');
 if (!envUrl) {
@@ -47,8 +46,7 @@ async function pollDone() {
 }
 
 async function run() {
-  const app = createApp(envUrl);
-  const server = createServer(app);
+  const server = createApp(envUrl);
   
   // Timeout guard for startup
   const startupTimeout = setTimeout(() => {

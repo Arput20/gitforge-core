@@ -118,7 +118,7 @@ export function paginate<T>(items: T[], page: number = 1, perPage: number = 30):
 }
 
 // --- Rest Handler ---
-export async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, urlParts: string[], envUrl: string) {
+async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, urlParts: string[], envUrl: string) {
   const method = req.method;
   const path = urlParts.join('/');
   const urlObj = new URL(req.url!, 'http://localhost');
@@ -150,37 +150,29 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
   }
 
   if (method === 'POST' && path === 'user/repos') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body);
-        const login = buildScenario().viewer.login;
-        const repo: Repo = {
-        id: Date.now(),
-        owner: { login: login, id: 1 },
-        name: data.name,
-        full_name: `${login}/${data.name}`,
-        description: data.description || '',
-        private: data.private || false,
-        default_branch: 'main',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        html_url: `http://${host}/repos/${login}/${data.name}`,
-        fork: false,
-        refs: new Map(),
-        objects: new Map(),
-        labels: new Map(),
-        issues: [],
-        pulls: [],
-        };
+    const data = await consumeJson(req);
+    const login = buildScenario().viewer.login;
+    const repo: Repo = {
+      id: Date.now(),
+      owner: { login: login, id: 1 },
+      name: data.name,
+      full_name: `${login}/${data.name}`,
+      description: data.description || '',
+      private: data.private || false,
+      default_branch: 'main',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      html_url: `http://${host}/repos/${login}/${data.name}`,
+      fork: false,
+      refs: new Map(),
+      objects: new Map(),
+      labels: new Map(),
+      issues: [],
+      pulls: [],
+    };
 
-        store.repos.set(`${repo.owner.login}/${repo.name}`, repo);
-        sendJson(res, 201, repoJson(repo, host));
-      } catch {
-        sendError(res, 400, 'Malformed JSON');
-      }
-    });
+    store.repos.set(`${repo.owner.login}/${repo.name}`, repo);
+    sendJson(res, 201, repoJson(repo, host));
     return;
   }
 
@@ -215,28 +207,22 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
         }
         
         if (method === 'PUT') {
-            let body = '';
-            req.on('data', chunk => { body += chunk; });
-            req.on('end', () => {
-                const data = JSON.parse(body);
-                const content = Buffer.from(data.content, 'base64');
-                const blob = createBlob(content);
-                repo.objects.set(blob.sha, { type: 'blob', bytes: blob.bytes });
-                
-                // For simplicity, we just create a tree with this one file.
-                // In a real implementation, we'd need to update the existing tree.
-                const tree = createTree([{ mode: '100644', name: filePath.split('/').pop()!, sha: blob.sha }]);
-                repo.objects.set(tree.sha, { type: 'tree', bytes: tree.bytes });
+            const data = await consumeJson(req);
+            const content = Buffer.from(data.content, 'base64');
+            const blob = createBlob(content);
+            repo.objects.set(blob.sha, { type: 'blob', bytes: blob.bytes });
+            
+            const tree = createTree([{ mode: '100644', name: filePath.split('/').pop()!, sha: blob.sha }]);
+            repo.objects.set(tree.sha, { type: 'tree', bytes: tree.bytes });
 
-                const parentSha = repo.refs.get('main') || null;
-                const commit = createCommit(tree.sha, parentSha, data.message, { name: 'user', email: 'user@example.com', date: `${Math.floor(Date.now() / 1000)} +0000` });
-                repo.objects.set(commit.sha, { type: 'commit', bytes: commit.bytes });
-                repo.refs.set('main', commit.sha);
+            const parentSha = repo.refs.get('main') || null;
+            const commit = createCommit(tree.sha, parentSha, data.message, { name: 'user', email: 'user@example.com', date: `${Math.floor(Date.now() / 1000)} +0000` });
+            repo.objects.set(commit.sha, { type: 'commit', bytes: commit.bytes });
+            repo.refs.set('main', commit.sha);
 
-                sendJson(res, 201, {
-                    content: { name: filePath.split('/').pop(), path: filePath, sha: blob.sha, size: content.length, type: 'file', encoding: 'base64', content: data.content },
-                    commit: { sha: commit.sha, message: data.message, author: { name: 'user', email: 'user@example.com', date: new Date().toISOString() }, committer: { name: 'user', email: 'user@example.com', date: new Date().toISOString() } }
-                });
+            sendJson(res, 201, {
+                content: { name: filePath.split('/').pop(), path: filePath, sha: blob.sha, size: content.length, type: 'file', encoding: 'base64', content: data.content },
+                commit: { sha: commit.sha, message: data.message, author: { name: 'user', email: 'user@example.com', date: new Date().toISOString() }, committer: { name: 'user', email: 'user@example.com', date: new Date().toISOString() } }
             });
             return;
         }
@@ -254,13 +240,9 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
             sendJson(res, 200, paginate(labels, page, perPage));
             return;
         } else if (method === 'POST') {
-            let body = '';
-            req.on('data', chunk => { body += chunk; });
-            req.on('end', () => {
-                const data = JSON.parse(body);
-                repo.labels.set(data.name, data.color);
-                sendJson(res, 201, { name: data.name, color: data.color });
-            });
+            const data = await consumeJson(req);
+            repo.labels.set(data.name, data.color);
+            sendJson(res, 201, { name: data.name, color: data.color });
             return;
         }
     }
@@ -270,25 +252,21 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
             sendJson(res, 200, paginate(repo.issues, page, perPage));
             return;
         } else if (method === 'POST') {
-            let body = '';
-            req.on('data', chunk => { body += chunk; });
-            req.on('end', () => {
-                const data = JSON.parse(body);
-                const issue: Issue = {
-                    id: Date.now(),
-                    number: repo.issues.length + 1,
-                    title: data.title,
-                    body: data.body || '',
-                    state: 'open',
-                    labels: data.labels || [],
-                    comments: [],
-                    user: { login: 'user' },
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                };
-                repo.issues.push(issue);
-                sendJson(res, 201, issue);
-            });
+            const data = await consumeJson(req);
+            const issue: Issue = {
+                id: Date.now(),
+                number: repo.issues.length + 1,
+                title: data.title,
+                body: data.body || '',
+                state: 'open',
+                labels: data.labels || [],
+                comments: [],
+                user: { login: 'user' },
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            };
+            repo.issues.push(issue);
+            sendJson(res, 201, issue);
             return;
         }
     }
@@ -298,48 +276,38 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
             sendJson(res, 200, paginate(repo.pulls, page, perPage));
             return;
         } else if (method === 'POST') {
-            let body = '';
-            req.on('data', chunk => { body += chunk; });
-            req.on('end', () => {
-                const data = JSON.parse(body);
-                const pull: Pull = {
-                    id: Date.now(),
-                    number: repo.pulls.length + 1,
-                    title: data.title,
-                    body: data.body || '',
-                    state: 'open',
-                    labels: [],
-                    comments: [],
-                    user: { login: 'user' },
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    head: { ref: data.head },
-                    base: { ref: data.base },
-                    merged: false,
-                    mergeable: true
-                };
-                repo.pulls.push(pull);
-                sendJson(res, 201, pull);
-            });
+            const data = await consumeJson(req);
+            const pull: Pull = {
+                id: Date.now(),
+                number: repo.pulls.length + 1,
+                title: data.title,
+                body: data.body || '',
+                state: 'open',
+                labels: [],
+                comments: [],
+                user: { login: 'user' },
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                head: { ref: data.head },
+                base: { ref: data.base },
+                merged: false,
+                mergeable: true
+            };
+            repo.pulls.push(pull);
+            sendJson(res, 201, pull);
             return;
         } else if (method === 'PUT') {
-            // Updating pull request (e.g., closing)
              const pullNumber = parseInt(parts[4]);
              const pull = repo.pulls.find(p => p.number === pullNumber);
              if (!pull) return sendError(res, 404, 'Pull not found');
              
-             let body = '';
-             req.on('data', chunk => { body += chunk; });
-             req.on('end', () => {
-                 const data = JSON.parse(body);
-                 if (data.state) pull.state = data.state;
-                 sendJson(res, 200, pull);
-             });
+             const data = await consumeJson(req);
+             if (data.state) pull.state = data.state;
+             sendJson(res, 200, pull);
              return;
         }
     }
     else if (parts.length === 3) {
-      // Original repo GET
       sendJson(res, 200, repoJson(repo, host));
       return;
     }
@@ -348,31 +316,67 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
   sendError(res, 404, 'Not Found');
 }
 
+async function consumeJson(req: http.IncomingMessage): Promise<any> {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            try {
+                resolve(JSON.parse(body));
+            } catch (e) {
+                reject(new Error('Malformed JSON'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
 // --- App ---
 export function createApp(envUrl: string) {
-  return http.createServer(async (req, res) => {
-    const urlObj = new URL(req.url!, 'http://localhost');
-    const path = urlObj.pathname;
+  const server = http.createServer(async (req, res) => {
+    req.on('error', (err) => {
+      console.error('Request error:', err);
+      if (!res.writableEnded) res.destroy();
+    });
+    res.on('error', (err) => {
+      console.error('Response error:', err);
+    });
 
-    if (path === '/healthz' && req.method === 'GET') {
-      sendJson(res, 200, { ok: true });
-      return;
+    try {
+        const urlObj = new URL(req.url!, 'http://localhost');
+        const path = urlObj.pathname;
+
+        if (path === '/healthz' && req.method === 'GET') {
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+
+        // Auth check
+        const auth = req.headers['authorization'];
+        if (!auth || !auth.startsWith('Bearer ')) {
+          sendError(res, 401, 'Unauthorized');
+          return;
+        }
+
+        if (path.startsWith('/api/v3')) {
+          const parts = path.split('/').filter(p => p !== '');
+          await handleRest(req, res, parts.slice(2), envUrl);
+          return;
+        }
+
+        sendError(res, 404, 'Not Found');
+    } catch (e) {
+        console.error('Handler error:', e);
+        if (!res.writableEnded) {
+            sendError(res, 500, 'Internal Server Error');
+        }
     }
-
-    // Auth check
-    const auth = req.headers['authorization'];
-    if (!auth || !auth.startsWith('Bearer ')) {
-      sendError(res, 401, 'Unauthorized');
-      return;
-    }
-
-    if (path.startsWith('/api/v3')) {
-      const parts = path.split('/').filter(p => p !== '');
-      // parts[0] is 'api', parts[1] is 'v3'
-      await handleRest(req, res, parts.slice(2), envUrl);
-      return;
-    }
-
-    sendError(res, 404, 'Not Found');
   });
+
+  server.on('clientError', (err, socket) => {
+    console.error('Client error:', err);
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+  });
+
+  return server;
 }
