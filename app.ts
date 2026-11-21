@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { buildScenario } from './src/scenario.ts';
 
 // --- Store ---
 export interface Repo {
@@ -88,6 +89,16 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
   const page = parseInt(urlObj.searchParams.get('page') || '1');
   const perPage = parseInt(urlObj.searchParams.get('per_page') || '30');
 
+  if (path === '') {
+    sendJson(res, 200, {}, { 'X-OAuth-Scopes': 'repo, read:org' });
+    return;
+  }
+
+  if (path === 'meta') {
+    sendJson(res, 200, { installed_version: '1.0.0' });
+    return;
+  }
+
   if (method === 'GET' && path === 'user/repos') {
     const repos = Array.from(store.repos.values());
     sendJson(res, 200, paginate(repos, page, perPage));
@@ -101,19 +112,20 @@ export async function handleRest(req: http.IncomingMessage, res: http.ServerResp
       try {
         const data = JSON.parse(body);
         const repo: Repo = {
-          id: Date.now(),
-          owner: 'viewer', // Should be derived from token
-          name: data.name,
-          description: data.description || '',
-          private: data.private || false,
-          defaultBranch: 'main',
-          createdAt: new Date().toISOString(),
-          refs: new Map(),
-          objects: new Map(),
-          labels: new Map(),
-          issues: [],
-          pulls: [],
+        id: Date.now(),
+        owner: buildScenario().viewer.login,
+        name: data.name,
+        description: data.description || '',
+        private: data.private || false,
+        defaultBranch: 'main',
+        createdAt: new Date().toISOString(),
+        refs: new Map(),
+        objects: new Map(),
+        labels: new Map(),
+        issues: [],
+        pulls: [],
         };
+
         store.repos.set(`${repo.owner}/${repo.name}`, repo);
         sendJson(res, 201, repo);
       } catch {
