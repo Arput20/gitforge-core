@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { buildScenario } from './src/scenario.ts';
 import { createBlob, createTree, createCommit } from './src/git.ts';
+import { handleGit } from './src/git-handler.ts';
 
 // --- Store ---
 export interface Repo {
@@ -362,6 +363,17 @@ export function createApp(envUrl: string) {
           const parts = path.split('/').filter(p => p !== '');
           await handleRest(req, res, parts.slice(2), envUrl);
           return;
+        }
+
+        // Git Smart HTTP
+        const parts = path.split('/').filter(p => p !== '');
+        if (parts.length >= 3 && parts[2] === 'info' && parts[3] === 'refs') {
+            await handleGit(req, res, parts[0], parts[1], 'info/refs');
+            return;
+        }
+        if (parts.length >= 3 && (parts[2] === 'git-upload-pack' || parts[2] === 'git-receive-pack')) {
+            await handleGit(req, res, parts[0], parts[1], parts[2]);
+            return;
         }
 
         sendError(res, 404, 'Not Found');
