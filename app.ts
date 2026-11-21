@@ -18,6 +18,7 @@ export interface Repo {
   fork: boolean;
   refs: Map<string, string>;
   objects: Map<string, { type: string; bytes: Uint8Array }>;
+  pathMap: Map<string, string>;
   labels: Map<string, string>;
   issues: Issue[];
   pulls: Pull[];
@@ -60,7 +61,7 @@ export interface Issue {
   title: string;
   body: string;
   state: 'open' | 'closed';
-  labels: string[];
+  labels: { name: string; color: string }[];
   comments: Comment[];
   user: { login: string };
   createdAt: string;
@@ -167,6 +168,7 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
       fork: false,
       refs: new Map(),
       objects: new Map(),
+      pathMap: new Map(),
       labels: new Map(),
       issues: [],
       pulls: [],
@@ -190,12 +192,28 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
 
     const subPath = parts.slice(3).join('/');
 
+    // Git Refs
+    if (subPath.startsWith('git/refs')) {
+        if (method === 'POST') {
+            const data = await consumeJson(req);
+            repo.refs.set(data.ref, data.sha);
+            sendJson(res, 201, { ref: data.ref, object: { sha: data.sha, type: 'commit', url: `http://${host}/api/v3/repos/${owner}/${repoName}/git/commits/${data.sha}` } });
+            return;
+        }
+        if (method === 'GET') {
+            const refs = Array.from(repo.refs.entries()).map(([ref, sha]) => ({ ref, object: { sha, type: 'commit', url: `http://${host}/api/v3/repos/${owner}/${repoName}/git/commits/${sha}` } }));
+            sendJson(res, 200, refs);
+            return;
+        }
+    }
     // Contents
-    if (subPath.startsWith('contents')) {
+    else if (subPath.startsWith('contents')) {
         const filePath = parts.slice(4).join('/');
         
         if (method === 'GET') {
-            const object = repo.objects.get(filePath);
+            const sha = repo.pathMap.get(filePath);
+            if (!sha) return sendError(res, 404, 'File not found');
+            const object = repo.objects.get(sha);
             if (!object) return sendError(res, 404, 'File not found');
             sendJson(res, 200, {
                 name: filePath.split('/').pop(),
@@ -213,6 +231,8 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
             const blob = createBlob(content);
             repo.objects.set(blob.sha, { type: 'blob', bytes: blob.bytes });
             
+            repo.pathMap.set(filePath, blob.sha);
+
             const tree = createTree([{ mode: '100644', name: filePath.split('/').pop()!, sha: blob.sha }]);
             repo.objects.set(tree.sha, { type: 'tree', bytes: tree.bytes });
 
@@ -229,8 +249,9 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
         }
 
         if (method === 'DELETE') {
-            repo.objects.delete(filePath);
-            sendJson(res, 200, { message: 'File deleted' });
+            repo.pathMap.delete(filePath);
+            res.writeHead(204);
+            res.end();
             return;
         }
     }
@@ -249,18 +270,37 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
     }
     // Issues
     else if (subPath.startsWith('issues')) {
+        const pathParts = subPath.split('/');
+        if (pathParts.length > 1) { // /issues/{n}
+            const issueNumber = parseInt(pathParts[1]);
+            const issue = repo.issues.find(i => i.number === issueNumber);
+            if (!issue) return sendError(res, 404, 'Issue not found');
+            
+            if (method === 'GET') {
+                sendJson(res, 200, issue);
+                return;
+            }
+            if (method === 'PATCH') {
+                const data = await consumeJson(req);
+                if (data.state) issue.state = data.state;
+                issue.updatedAt = new Date().toISOString();
+                sendJson(res, 200, issue);
+                return;
+            }
+        }
         if (method === 'GET') {
             sendJson(res, 200, paginate(repo.issues, page, perPage));
             return;
         } else if (method === 'POST') {
             const data = await consumeJson(req);
+            const labelObjects = (data.labels || []).map((name: string) => ({ name, color: repo.labels.get(name) || 'cccccc' }));
             const issue: Issue = {
                 id: Date.now(),
                 number: repo.issues.length + 1,
                 title: data.title,
                 body: data.body || '',
                 state: 'open',
-                labels: data.labels || [],
+                labels: labelObjects,
                 comments: [],
                 user: { login: 'user' },
                 createdAt: new Date().toISOString(),
@@ -309,6 +349,19 @@ async function handleRest(req: http.IncomingMessage, res: http.ServerResponse, u
         }
     }
     else if (parts.length === 3) {
+      if (method === 'PATCH') {
+          const data = await consumeJson(req);
+          if (data.description) repo.description = data.description;
+          repo.updatedAt = new Date().toISOString();
+          sendJson(res, 200, repoJson(repo, host));
+          return;
+      }
+      if (method === 'DELETE') {
+          store.repos.delete(`${owner}/${repoName}`);
+          res.writeHead(204);
+          res.end();
+          return;
+      }
       sendJson(res, 200, repoJson(repo, host));
       return;
     }
