@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { sendJson, sendError } from './src/httpx';
+import { sendJson, sendError } from './src/httpx.ts';
+import { handleRest } from './src/rest.ts';
 
 export function createApp() {
   return http.createServer(async (req, res) => {
@@ -17,16 +18,11 @@ export function createApp() {
       return;
     }
 
-    if (url.startsWith('/api/v3') && req.method === 'GET') {
-      if (url === '/api/v3' || url === '/api/v3/') {
-        res.setHeader('X-OAuth-Scopes', 'repo, read:org');
-        sendJson(res, 200, { message: 'GitHub API v3' });
-        return;
-      }
-      if (url === '/api/v3/meta') {
-        sendJson(res, 200, { installed_version: '1.0.0' });
-        return;
-      }
+    if (url.startsWith('/api/v3')) {
+      const parts = url.split('/').filter(p => p !== '');
+      // parts[0] is 'api', parts[1] is 'v3'
+      await handleRest(req, res, parts.slice(2));
+      return;
     }
 
     sendError(res, 404, 'Not Found');
